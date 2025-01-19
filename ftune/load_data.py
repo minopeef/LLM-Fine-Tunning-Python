@@ -3,12 +3,12 @@ import pandas as pd
 
 from pathlib import Path
 
-DATA_PATH = Path('data/')
+DATA_PATH = Path('train_model/')
 DATA_PATH.mkdir(parents=True, exist_ok=True)
 
 # Load the dataset
 # Загрузка JSON файла
-json_path = "./data/dataset.json"  # Укажите путь к вашему JSON-файлу
+json_path = "../data/dataset.json"  # Укажите путь к вашему JSON-файлу
 
 dataset = pd.read_json(json_path)
 

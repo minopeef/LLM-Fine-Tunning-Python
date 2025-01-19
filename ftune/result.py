@@ -25,3 +25,6 @@ generated_texts = generator.generate_text(
 )
 for i, text in enumerate(generated_texts['generated_texts']):
     print(f"Generated Text {i+1}: {text}")
+    
+result = generator.generate_text("How do I build a Flutter APK?", num_return_sequences=1)
+print("Cleaned Texts:", result["generated_texts"])
