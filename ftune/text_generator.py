@@ -1,142 +1,164 @@
-# from transformers import GPT2LMHeadModel, GPT2Tokenizer
-# from pathlib import Path
-# from load_data import DATA_PATH
-
-# class TextGenerator:
-#     def __init__(self, model_name='my_ft_model', data_path=DATA_PATH):
-#         """
-#         Инициализация модели и токенизатора.
-#         Загружаем модель и токенизатор из указанного пути.
-#         """
-#         model_path = Path(data_path) / model_name
-#         self.tokenizer = GPT2Tokenizer.from_pretrained(str(model_path))
-#         self.model = GPT2LMHeadModel.from_pretrained(str(model_path))
-#         self.model.eval()
-
-#     def generate_text(self, 
-#                     instruction: str, 
-#                     max_length=100, 
-#                     num_return_sequences=1, 
-#                     temperature=1.0, 
-#                     top_k=0, 
-#                     top_p=1.0, 
-#                     do_sample=False):
-#         """
-#         Генерация текста на основе заданного начального текста (prompt) и параметров.
-        
-#         Параметры:
-#         - instruction: вопрос.
-#         - max_length: Максимальная длина сгенерированного текста.
-#         - num_return_sequences: Количество возвращаемых последовательностей.
-#         - temperature: Контролирует разнообразие вывода.
-#         - top_k: Если больше 0, ограничивает количество слов для выборки только k наиболее вероятными словами.
-#         - top_p: Если меньше 1.0, применяется nucleus sampling.
-#         - do_sample: Если True, включает случайную выборку для увеличения разнообразия.
-#         """
-#         # Формирование prompt
-#         prompt_text = f"<instruction> {instruction} {self.tokenizer.eos_token} <response> "
-        
-#         # Кодирование текста в формате, пригодном для модели
-#         encoded_input = self.tokenizer.encode(prompt_text, return_tensors='pt')
-        
-#         # Генерация текстов
-#         outputs = self.model.generate(
-#             encoded_input,
-#             max_length=max_length + len(encoded_input[0]),
-#             num_return_sequences=num_return_sequences,
-#             temperature=temperature,
-#             top_k=top_k,
-#             top_p=top_p,
-#             do_sample=do_sample,
-#             no_repeat_ngram_size=2,
-#              pad_token_id=self.tokenizer.pad_token_id  # Передаем pad_token_id
-#         )
-        
-#         # Декодирование результатов
-#         all_texts = [self.tokenizer.decode(output, skip_special_tokens=True) for output in outputs]
-        
-#         # Удаление входных данных из текстов
-#         prompt_length = len(self.tokenizer.decode(encoded_input[0], skip_special_tokens=True))
-#         trimmed_texts = [text[prompt_length:] for text in all_texts]
-        
-#         # Возврат результатов в виде словаря
-#         return {
-#             "full_texts": all_texts,
-#             "generated_texts": trimmed_texts
-#         }
+"""
+Text generation module for fine-tuned GPT-2 models.
+"""
 import re
+import logging
+import torch
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
 from pathlib import Path
-from load_data import DATA_PATH
+from typing import Optional, Dict, Any, List
+
+try:
+    from .config import (
+        TRAIN_MODEL_DIR,
+        DEFAULT_OUTPUT_MODEL_NAME,
+        DEFAULT_GENERATION_CONFIG,
+        INSTRUCTION_TOKEN,
+        RESPONSE_TOKEN
+    )
+except ImportError:
+    from config import (
+        TRAIN_MODEL_DIR,
+        DEFAULT_OUTPUT_MODEL_NAME,
+        DEFAULT_GENERATION_CONFIG,
+        INSTRUCTION_TOKEN,
+        RESPONSE_TOKEN
+    )
+
+logger = logging.getLogger(__name__)
+
 
 class TextGenerator:
-    def __init__(self, model_name='my_ft_model', data_path=DATA_PATH):
+    """
+    Text generator class for fine-tuned GPT-2 models.
+    """
+    
+    def __init__(self, 
+                 model_name: str = DEFAULT_OUTPUT_MODEL_NAME, 
+                 data_path: Optional[Path] = None,
+                 device: Optional[str] = None):
         """
-        Инициализация модели и токенизатора.
-        Загружаем модель и токенизатор из указанного пути.
+        Initialize the text generator.
+        
+        Args:
+            model_name: Name of the fine-tuned model directory.
+            data_path: Path to the model directory. If None, uses default.
+            device: Device to use ('cuda', 'cpu', or None for auto-detection).
         """
+        if data_path is None:
+            data_path = TRAIN_MODEL_DIR
+        
         model_path = Path(data_path) / model_name
-        self.tokenizer = GPT2Tokenizer.from_pretrained(str(model_path))
-        self.model = GPT2LMHeadModel.from_pretrained(str(model_path))
-        self.model.eval()
+        
+        if not model_path.exists():
+            raise FileNotFoundError(f"Model not found at {model_path}")
+        
+        # Device management
+        if device is None:
+            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        else:
+            self.device = device
+        
+        logger.info(f"Loading model from {model_path} on device '{self.device}'")
+        
+        try:
+            self.tokenizer = GPT2Tokenizer.from_pretrained(str(model_path))
+            self.model = GPT2LMHeadModel.from_pretrained(str(model_path))
+            self.model.to(self.device)
+            self.model.eval()
+            
+            # Ensure pad_token is set
+            if self.tokenizer.pad_token is None:
+                self.tokenizer.pad_token = self.tokenizer.eos_token
+            
+            logger.info("Model loaded successfully")
+            
+        except Exception as e:
+            logger.error(f"Error loading model: {e}")
+            raise
 
     @staticmethod
-    def remove_tags(text):
+    def remove_tags(text: str) -> str:
         """
-        Удаляет HTML-теги из текста.
+        Remove HTML/XML tags from text.
+        
+        Args:
+            text: Input text that may contain tags.
+            
+        Returns:
+            Text with tags removed.
         """
         return re.sub(r'<.*?>', '', text)
 
     def generate_text(self, 
-                    instruction: str, 
-                    max_length=100, 
-                    num_return_sequences=1, 
-                    temperature=1.0, 
-                    top_k=0, 
-                    top_p=1.0, 
-                    do_sample=False):
+                     instruction: str, 
+                     max_length: int = 100, 
+                     num_return_sequences: int = 1, 
+                     temperature: float = 1.0, 
+                     top_k: int = 0, 
+                     top_p: float = 1.0, 
+                     do_sample: bool = False,
+                     generation_config: Optional[Dict[str, Any]] = None) -> Dict[str, List[str]]:
         """
-        Генерация текста на основе заданного начального текста (prompt) и параметров.
+        Generate text based on instruction.
         
-        Параметры:
-        - instruction: вопрос.
-        - max_length: Максимальная длина сгенерированного текста.
-        - num_return_sequences: Количество возвращаемых последовательностей.
-        - temperature: Контролирует разнообразие вывода.
-        - top_k: Если больше 0, ограничивает количество слов для выборки только k наиболее вероятными словами.
-        - top_p: Если меньше 1.0, применяется nucleus sampling.
-        - do_sample: Если True, включает случайную выборку для увеличения разнообразия.
+        Args:
+            instruction: Input instruction/question.
+            max_length: Maximum length of generated text.
+            num_return_sequences: Number of sequences to generate.
+            temperature: Sampling temperature (controls randomness).
+            top_k: Top-k sampling parameter.
+            top_p: Nucleus sampling parameter.
+            do_sample: Whether to use sampling.
+            generation_config: Optional dictionary to override generation parameters.
+            
+        Returns:
+            Dictionary with 'full_texts' and 'generated_texts' lists.
         """
-        # Формирование prompt
-        prompt_text = f"<instruction> {instruction} {self.tokenizer.eos_token} <response> "
+        if generation_config:
+            max_length = generation_config.get('max_length', max_length)
+            num_return_sequences = generation_config.get('num_return_sequences', num_return_sequences)
+            temperature = generation_config.get('temperature', temperature)
+            top_k = generation_config.get('top_k', top_k)
+            top_p = generation_config.get('top_p', top_p)
+            do_sample = generation_config.get('do_sample', do_sample)
         
-        # Кодирование текста в формате, пригодном для модели
+        # Build prompt
+        eos_token = self.tokenizer.eos_token
+        prompt_text = f"{INSTRUCTION_TOKEN} {instruction} {eos_token} {RESPONSE_TOKEN} "
+        
+        # Encode input
         encoded_input = self.tokenizer.encode(prompt_text, return_tensors='pt')
+        encoded_input = encoded_input.to(self.device)
         
-        # Генерация текстов
-        outputs = self.model.generate(
-            encoded_input,
-            max_length=max_length + len(encoded_input[0]),
-            num_return_sequences=num_return_sequences,
-            temperature=temperature,
-            top_k=top_k,
-            top_p=top_p,
-            do_sample=do_sample,
-            no_repeat_ngram_size=2,
-            pad_token_id=self.tokenizer.eos_token_id  # Передаем pad_token_id
-        )
+        # Generate text
+        with torch.no_grad():
+            outputs = self.model.generate(
+                encoded_input,
+                max_length=max_length + len(encoded_input[0]),
+                num_return_sequences=num_return_sequences,
+                temperature=temperature,
+                top_k=top_k if top_k > 0 else 50,
+                top_p=top_p,
+                do_sample=do_sample,
+                no_repeat_ngram_size=2,
+                pad_token_id=self.tokenizer.eos_token_id,
+                eos_token_id=self.tokenizer.eos_token_id
+            )
         
-        # Декодирование результатов
-        all_texts = [self.tokenizer.decode(output, skip_special_tokens=True) for output in outputs]
+        # Decode results
+        all_texts = [
+            self.tokenizer.decode(output, skip_special_tokens=True) 
+            for output in outputs
+        ]
         
-        # Удаление входных данных из текстов
+        # Extract generated text (remove prompt)
         prompt_length = len(self.tokenizer.decode(encoded_input[0], skip_special_tokens=True))
-        trimmed_texts = [text[prompt_length:] for text in all_texts]
+        trimmed_texts = [text[prompt_length:].strip() for text in all_texts]
         
-        # Удаление тегов из текста
-        cleaned_texts = [self.remove_tags(text) for text in trimmed_texts]
+        # Remove tags
+        cleaned_texts = [self.remove_tags(text).strip() for text in trimmed_texts]
         
-        # Возврат результатов в виде словаря
         return {
             "full_texts": all_texts,
             "generated_texts": cleaned_texts
